@@ -1,8 +1,11 @@
 /**
  * Wiring: loads the real extension entry point against a stub pi API and drives
- * the command/shortcut hand-off. This is the only place the shortcut-prefill
- * dance is verified, because pi does not expose switchSession() to shortcut
- * contexts.
+ * the commands, the shortcut fallback, and the docked sidebar itself.
+ *
+ * Two hand-offs are verified here because pi does not expose switchSession() to
+ * shortcut or terminal-input contexts:
+ *   - the overlay fallback queues a PanelAction and dispatches /ws-resume
+ *   - the dock does the same from its raw terminal input handler
  */
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
@@ -24,10 +27,17 @@ interface Notice {
 const theme = { fg: (_color: string, text: string) => `\x1b[36m${text}\x1b[0m`, style: (text: string) => `\x1b[7m${text}\x1b[0m` };
 const tui = { terminal: { rows: 42, columns: 120 }, requestRender: () => {} };
 
+interface SentMessage {
+	text: string;
+	options?: { expandPromptTemplates?: boolean };
+}
+
 describe("extension wiring", () => {
 	let env: FixtureEnv;
 	const commands = new Map<string, { description?: string; handler: (args: string, ctx: unknown) => unknown }>();
 	const shortcuts = new Map<string, { description?: string; handler: (ctx: unknown) => unknown }>();
+	const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+	const sent: SentMessage[] = [];
 
 	before(() => {
 		env = createEnv();
@@ -39,6 +49,13 @@ describe("extension wiring", () => {
 				commands.set(name, options),
 			registerShortcut: (key: string, options: { description?: string; handler: (ctx: unknown) => unknown }) =>
 				shortcuts.set(key, options),
+			on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+				handlers.set(event, handler);
+				return () => handlers.delete(event);
+			},
+			sendUserMessage: (text: string, options?: SentMessage["options"]) => {
+				sent.push({ text, options });
+			},
 		};
 		workspacesExtension(pi as unknown as ExtensionAPI);
 	});
@@ -76,9 +93,10 @@ describe("extension wiring", () => {
 		assert.equal(typeof workspacesExtension, "function");
 	});
 
-	it("registers the command, the hand-off command, and the shortcut", () => {
+	it("registers the commands, the hand-off command, and the shortcut", () => {
 		assert.ok(commands.has("ws"));
 		assert.ok(commands.has("ws-resume"));
+		assert.ok(commands.has("ws-sidebar"));
 		assert.ok(shortcuts.has("ctrl+shift+s"), [...shortcuts.keys()].join(","));
 		for (const options of [...commands.values(), ...shortcuts.values()]) {
 			assert.equal(typeof options.description, "string");
@@ -104,27 +122,28 @@ describe("extension wiring", () => {
 		assert.ok(notices.some((notice) => (notice.text ?? "").includes("wait for the current turn")), JSON.stringify(notices));
 	});
 
-	describe("shortcut hand-off", () => {
-		let prefill: string | undefined;
-		let queuedNotices: Notice[] = [];
+	describe("shortcut hand-off (overlay fallback)", () => {
+		let dispatched: string | undefined;
 
 		before(async () => {
-			queuedNotices = [];
+			sent.length = 0;
 			await shortcuts.get("ctrl+shift+s")!.handler({
 				...baseCtx(),
 				isIdle: () => true,
-				ui: makeUi(queuedNotices, ["\x1b[B", "\r"]),
+				ui: makeUi([], ["\x1b[B", "\r"]),
 			});
-			prefill = queuedNotices.find((notice) => typeof notice.editor === "string")?.editor;
+			dispatched = sent.at(-1)?.text;
 		});
 
-		it("prefills /ws-resume with a queued id", () => {
-			assert.ok(prefill?.startsWith("/ws-resume ws-"), String(prefill));
-			assert.ok(queuedNotices.some((notice) => (notice.text ?? "").includes("Press Enter")), JSON.stringify(queuedNotices));
+		it("queues the panel action and dispatches /ws-resume for prompt expansion", () => {
+			const call = sent.at(-1);
+			assert.ok(call, "sendUserMessage was called");
+			assert.ok(call!.text.startsWith("/ws-resume ws-"), call!.text);
+			assert.equal(call!.options?.expandPromptTemplates, true, "without this pi sends the slash text as a prompt");
 		});
 
 		it("switches after waiting for idle, then consumes the queue", async () => {
-			const id = prefill!.split(" ")[1]!;
+			const id = dispatched!.split(" ")[1]!;
 			const notices: Notice[] = [];
 			const switched: string[] = [];
 			let waits = 0;
@@ -235,9 +254,202 @@ describe("extension wiring", () => {
 				commands.set(name, options),
 			registerShortcut: (key: string, options: { description?: string; handler: (ctx: unknown) => unknown }) =>
 				shortcuts.set(key, options),
+			on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+				handlers.set(event, handler);
+				return () => handlers.delete(event);
+			},
+			sendUserMessage: () => {},
 		};
 		workspacesExtension(pi as unknown as ExtensionAPI);
 		assert.equal(commands.size + shortcuts.size, before, "re-registering is idempotent");
 		assert.equal(typeof ({} as ExtensionContext), "object");
+	});
+});
+
+/**
+ * The dock is a terminal compositor, so it can only be verified against a fake
+ * terminal that records what was written. These checks cover the three things
+ * that make it work: the narrowed `columns`, the erase rewrite, and the raw
+ * input handler that owns the keyboard only while focused.
+ */
+describe("docked sidebar", () => {
+	let env: FixtureEnv;
+	const commands = new Map<string, { handler: (args: string, ctx: unknown) => unknown }>();
+	const shortcuts = new Map<string, { handler: (ctx: unknown) => unknown }>();
+	const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+	const sent: SentMessage[] = [];
+
+	let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[] }) | undefined;
+	let widgetOptions: unknown;
+	let input: ((data: string) => { consume?: boolean; data?: string } | undefined) | undefined;
+
+	const writes: string[] = [];
+	const terminal = {
+		columns: 120,
+		rows: 24,
+		write: (data: string) => {
+			writes.push(data);
+		},
+	};
+	const fakeTui = {
+		terminal,
+		requestRender: () => {},
+		doRender: () => {
+			terminal.write("\x1b[2Kmain pane content");
+		},
+	};
+
+	before(() => {
+		env = createEnv();
+		writeSession(env.root, { cwd: env.dirs.alpha, message: "dock alpha session", ageMinutes: 2 });
+		writeSession(env.root, { cwd: env.dirs.beta, message: "dock beta session", ageMinutes: 30 });
+		const pi = {
+			registerCommand: (name: string, options: { handler: (args: string, ctx: unknown) => unknown }) => {
+				commands.set(name, options);
+			},
+			registerShortcut: (key: string, options: { handler: (ctx: unknown) => unknown }) => {
+				shortcuts.set(key, options);
+			},
+			on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+				handlers.set(event, handler);
+				return () => handlers.delete(event);
+			},
+			sendUserMessage: (text: string, options?: SentMessage["options"]) => {
+				sent.push({ text, options });
+			},
+		};
+		workspacesExtension(pi as unknown as ExtensionAPI);
+	});
+
+	after(() => env.cleanup());
+
+	const dockCtx = () => ({
+		hasUI: true,
+		mode: "tui",
+		cwd: env.dirs.alpha,
+		sessionManager: { getSessionFile: () => undefined, getSessionDir: () => env.root, getEntries: () => [] },
+		isIdle: () => true,
+		ui: {
+			notify: () => {},
+			setEditorText: () => {},
+			onTerminalInput: (handler: (data: string) => { consume?: boolean; data?: string } | undefined) => {
+				input = handler;
+				return () => {
+					input = undefined;
+				};
+			},
+			setWidget: (key: string, widgetFactory: typeof factory, options: unknown) => {
+				assert.equal(key, "workspaces-sidebar");
+				factory = widgetFactory;
+				widgetOptions = options;
+			},
+		},
+	});
+
+	it("installs on session_start as a zero-height widget below the editor", async () => {
+		await handlers.get("session_start")!({}, dockCtx());
+		assert.ok(factory, "a widget was registered");
+		assert.deepEqual(widgetOptions, { placement: "belowEditor" });
+		assert.ok(input, "raw terminal input was hooked");
+	});
+
+	it("shrinks the columns pi renders into and paints nothing itself", () => {
+		const component = factory!(fakeTui, theme);
+		// 120 - round(120 * 0.28) - 1
+		assert.equal(terminal.columns, 85);
+		assert.deepEqual(component.render(120), []);
+	});
+
+	it("paints the sidebar into the right-hand columns", () => {
+		writes.length = 0;
+		fakeTui.doRender();
+		const frame = writes.join("");
+		assert.ok(frame.includes("\x1b[?2026h") && frame.includes("\x1b[?2026l"), "synchronised output");
+		assert.ok(frame.includes("\x1b[?7l") && frame.includes("\x1b[?7h"), "auto-wrap off while painting");
+		assert.ok(frame.includes("\x1b[85X"), "the full-line erase stops at the dock");
+		assert.ok(!frame.includes("\x1b[2K"), "no unrewritten erase survives");
+		assert.ok(frame.includes("WORKSPACES"), "the sidebar body was written");
+		assert.ok(frame.includes("dock alpha session"), "the current workspace's session is listed");
+	});
+
+	/** Blur (twice is harmless) then focus, so each check starts from a known state. */
+	const ensureFocused = async () => {
+		input!("\x1b");
+		input!("\x1b");
+		await shortcuts.get("ctrl+shift+s")!.handler(dockCtx());
+	};
+
+	/** Move the selection to a known row: clamp at the top, then step down. */
+	const selectRow = (index: number) => {
+		for (let i = 0; i < 40; i += 1) input!("\x1b[A");
+		for (let i = 0; i < index; i += 1) input!("\x1b[B");
+	};
+
+	it("keeps its hands off the keyboard while unfocused", () => {
+		assert.ok(input);
+		assert.equal(input!("a"), undefined);
+		assert.equal(input!("\x1b[B"), undefined);
+		assert.equal(input!("\x1b"), undefined);
+	});
+
+	it("focuses on Ctrl+Shift+S and owns the keyboard only then", async () => {
+		await ensureFocused();
+		assert.deepEqual(input!("\x1b[B"), { consume: true }, "movement is consumed");
+		assert.deepEqual(input!("a"), { consume: true }, "stray typing cannot leak into the editor");
+		assert.equal(input!("\x1b[Z"), undefined, "unrecognised keys still reach pi");
+		await shortcuts.get("ctrl+shift+s")!.handler(dockCtx());
+		assert.equal(input!("\x1b[B"), undefined, "a second press toggles back out");
+	});
+
+	it("switches the selected session through /ws-resume with prompt expansion", async () => {
+		await ensureFocused();
+		selectRow(1); // 0 = the current workspace, 1 = its most recent session
+		sent.length = 0;
+		assert.deepEqual(input!("\r"), { consume: true }, "activate the selected row");
+		const call = sent.at(-1);
+		assert.ok(call, "sendUserMessage was called");
+		assert.ok(call!.text.startsWith("/ws-resume ws-"), call!.text);
+		assert.equal(call!.options?.expandPromptTemplates, true);
+	});
+
+	it("starts a session with n and opens the full panel with o", async () => {
+		await ensureFocused();
+		selectRow(0);
+		sent.length = 0;
+		input!("n");
+		assert.ok(sent.at(-1)?.text.startsWith("/ws-resume ws-"), String(sent.at(-1)?.text));
+
+		await ensureFocused();
+		sent.length = 0;
+		input!("o");
+		assert.equal(sent.at(-1)?.text, "/ws");
+		assert.equal(input!("a"), undefined, "opening the panel releases the keyboard");
+	});
+
+	it("blurs on Esc", async () => {
+		await ensureFocused();
+		assert.deepEqual(input!("\x1b"), { consume: true });
+		assert.equal(input!("a"), undefined, "blurred again");
+	});
+
+	it("resizes with /ws-sidebar width and releases the columns when turned off", async () => {
+		const notices: string[] = [];
+		const ctx = () => ({ ...dockCtx(), ui: { ...dockCtx().ui, notify: (text: string) => notices.push(text) } });
+
+		await commands.get("ws-sidebar")!.handler("width 40", ctx());
+		assert.equal(terminal.columns, 79, "120 - 40 - 1");
+		await commands.get("ws-sidebar")!.handler("status", ctx());
+		assert.ok(notices.some((text) => text.includes("40 cols")), JSON.stringify(notices));
+
+		await commands.get("ws-sidebar")!.handler("width abc", ctx());
+		assert.ok(notices.some((text) => text.includes("Usage")), JSON.stringify(notices));
+		assert.equal(terminal.columns, 79, "a rejected width changes nothing");
+
+		await commands.get("ws-sidebar")!.handler("off", ctx());
+		assert.ok(notices.some((text) => text.includes("off")), JSON.stringify(notices));
+		assert.equal(terminal.columns, 120, "the columns override was released");
+
+		await commands.get("ws-sidebar")!.handler("on", ctx());
+		assert.equal(terminal.columns, 79, "the remembered width is reapplied");
 	});
 });
