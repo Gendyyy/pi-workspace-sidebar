@@ -1,0 +1,64 @@
+{
+	"name": "pi-workspace-sidebar",
+	"version": "0.1.0",
+	"description": "Sidebar with a workspaces and sessions switcher for the pi coding agent: switch, create, rename, and delete sessions across every workspace.",
+	"type": "module",
+	"license": "MIT",
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"workspaces",
+		"sessions",
+		"sidebar",
+		"switcher",
+		"tui"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Gendyyy/pi-workspace-sidebar.git"
+	},
+	"bugs": {
+		"url": "https://github.com/Gendyyy/pi-workspace-sidebar/issues"
+	},
+	"homepage": "https://github.com/Gendyyy/pi-workspace-sidebar#readme",
+	"files": [
+		"assets",
+		"extensions",
+		"README.md",
+		"LICENSE"
+	],
+	"engines": {
+		"node": ">=22"
+	},
+	"pi": {
+		"extensions": [
+			"./extensions/workspaces/index.ts"
+		],
+		"image": "https://raw.githubusercontent.com/Gendyyy/pi-workspace-sidebar/main/assets/screenshot.png"
+	},
+	"scripts": {
+		"check": "tsc -p tests/tsconfig.json",
+		"test": "tsx --tsconfig tests/tsconfig.json --test tests/*.test.ts",
+		"screenshot": "tsx scripts/screenshot.mts"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"peerDependenciesMeta": {
+		"@earendil-works/pi-coding-agent": {
+			"optional": true
+		},
+		"@earendil-works/pi-tui": {
+			"optional": true
+		}
+	},
+	"devDependencies": {
+		"@earendil-works/pi-coding-agent": "^1.0.3",
+		"@earendil-works/pi-tui": "^1.0.3",
+		"@types/node": "^26.6.4",
+		"tsx": "^4.23.15",
+		"typescript": "^5.9.3"
+	}
+}
