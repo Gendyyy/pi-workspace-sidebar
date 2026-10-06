@@ -10,22 +10,20 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PanelAction, PanelDeps } from "../extensions/workspaces/panel.ts";
+import type { PanelAction, PanelDeps, WorkspacePanel } from "../extensions/workspaces/panel.ts";
 
 const root = join(tmpdir(), "pi-ws-screenshot");
 rmSync(root, { recursive: true, force: true });
 const home = join(root, "home");
 mkdirSync(home, { recursive: true });
 
-// os.homedir() honours $HOME on POSIX and data.ts snapshots it at import time,
-// so HOME has to be set before the modules below are loaded.
+// os.homedir() honours $HOME, and data.ts snapshots it at import time, so HOME
+// has to be redirected BEFORE the extension modules are loaded.
 process.env.HOME = home;
 
 const { loadWorkspaces, renameSession, deleteSession } = await import("../extensions/workspaces/data.ts");
-const { WorkspacePanel } = await import("../extensions/workspaces/panel.ts");
-const { renderSidebar } = await import("../extensions/workspaces/sidebar.ts");
-const { visibleWidth, truncateToWidth } = await import("@earendil-works/pi-tui");
-const { writeSession } = await import("../tests/fixtures.ts");
+const { WorkspacePanel: WorkspacePanelImpl } = await import("../extensions/workspaces/panel.ts");
+const { writeSession } = await import("./../tests/fixtures.ts");
 
 const sessions = join(root, "sessions");
 mkdirSync(sessions, { recursive: true });
@@ -93,7 +91,7 @@ const ROWS = 26;
 const WIDTH = 96;
 
 function build(): WorkspacePanel {
-	return new WorkspacePanel({
+	return new WorkspacePanelImpl({
 		theme,
 		tui: { terminal: { rows: ROWS, columns: 120 }, requestRender: () => {} } as unknown as PanelDeps["tui"],
 		currentCwd,
@@ -106,7 +104,7 @@ function build(): WorkspacePanel {
 }
 
 const shots: Array<{ name: string; keys: string[] }> = [
-	{ name: "panel", keys: [] },
+	{ name: "screenshot", keys: [] },
 	{ name: "folder", keys: ["o"] },
 	{ name: "rename", keys: ["\x1b[B", "r", "\x15", "b", "i", " ", "m", "a", "r", "t"] },
 	{ name: "search", keys: ["/", "d", "e", "e", "p"] },
@@ -121,49 +119,6 @@ for (const shot of shots) {
 	writeFileSync(target, `${panel.render(WIDTH).join("\n")}\n`);
 	ansiFiles.push(shot.name);
 }
-
-/**
- * The dock is painted with absolute cursor moves, so it has no single render()
- * to screenshot. Composite a plausible pi frame instead: the conversation on
- * the left, the docked sidebar on the right, exactly as the compositor lays it
- * out.
- */
-const DOCK_WIDTH = 34;
-const mainWidth = WIDTH - DOCK_WIDTH - 1;
-const fit = (line: string, width: number) => {
-	const clipped = truncateToWidth(line, width, "…", true);
-	return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
-};
-const mainLines = [
-	` ${theme.fg("muted", "pi")} ${theme.fg("dim", "ayu-mirage")}`,
-	"",
-	` ${theme.fg("accent", "▌")} ${theme.fg("text", "why is fact_encounter missing payer keys?")}`,
-	"",
-	` ${theme.fg("text", "Let me check the mart and the seed it joins to.")}`,
-	"",
-	` ${theme.fg("toolTitle", "⏺ read")} ${theme.fg("muted", "models/marts/fact_encounter.sql")}`,
-	`   ${theme.fg("toolOutput", "42  left join payer_dim p on p.payer_id = e.payer_id")}`,
-	`   ${theme.fg("toolOutput", "43  -- p.payer_key is null for legacy rows")}`,
-	"",
-	` ${theme.fg("text", "The join uses payer_id but the dimension is keyed on payer_key,")}`,
-	` ${theme.fg("text", "so legacy rows drop out of the mart entirely.")}`,
-	"",
-	` ${theme.fg("muted", "3 files changed · +48 −12")}`,
-	"",
-	` ${theme.fg("dim", ">")}`,
-];
-const dockLines = renderSidebar(
-	{ workspaces: marked, expanded: new Set([currentCwd]), selected: 1, focused: true },
-	DOCK_WIDTH,
-	ROWS,
-	theme,
-);
-const frame: string[] = [];
-for (let row = 0; row < ROWS; row += 1) {
-	frame.push(`${fit(mainLines[row] ?? "", mainWidth)}${theme.fg("border", "│")}${fit(dockLines[row] ?? "", DOCK_WIDTH)}`);
-}
-writeFileSync(join(import.meta.dirname, "..", "assets", "screenshot.ansi"), `${frame.join("\n")}\n`);
-ansiFiles.push("screenshot");
 
 const render = spawnSync("python3", [join(import.meta.dirname, "render_png.py"), ...ansiFiles], { stdio: "inherit" });
 if (render.status !== 0) process.exit(render.status ?? 1);
