@@ -3,7 +3,7 @@
 A workspaces panel for the [pi coding agent](https://pi.dev) that lists every
 workspace it knows about and the sessions inside them, and lets you switch,
 create, rename, and delete sessions without leaving the keyboard.
-`Ctrl+Shift+S` toggles it as a right-anchored overlay.
+`Ctrl+Shift+S` toggles it as a centered overlay.
 
 ```
 ╭────────────────────────────────── Workspaces ──────────────────────────────────╮

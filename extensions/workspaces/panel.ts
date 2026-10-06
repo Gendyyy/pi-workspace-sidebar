@@ -1,5 +1,5 @@
 /**
- * The /ws sidebar: a toggleable right-anchored panel that lists workspaces
+ * The /ws panel: a toggleable centered overlay that lists workspaces
  * (grouped by working directory) and the sessions inside them, and lets you
  * switch, create, rename, and delete without leaving the keyboard.
  *

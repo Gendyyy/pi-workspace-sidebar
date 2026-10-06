@@ -1,7 +1,7 @@
 /**
  * Workspaces panel (/ws, Ctrl+Shift+S).
  *
- * A toggleable right-anchored panel listing every workspace pi knows about
+ * A toggleable centered panel listing every workspace pi knows about
  * (grouped by session cwd) and the sessions inside each one. Enter switches,
  * n starts a new session, o browses to any folder, r renames, d deletes.
  *
@@ -95,10 +95,9 @@ async function openPanel(ctx: ExtensionContext, initialFilter?: string): Promise
 		{
 			overlay: true,
 			overlayOptions: {
-				anchor: "right-center",
+				anchor: "center",
 				width: panelWidth(),
 				maxHeight: "90%",
-				margin: { right: 1 },
 			},
 		},
 	);
