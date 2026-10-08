@@ -86,6 +86,8 @@ export class WorkspacePanel implements Component {
 	private mode: Mode = "list";
 	private selected = 0;
 	private scroll = 0;
+	private manualScroll = false;
+	private folderManualScroll = false;
 	private sortMode: "modified" | "created" = "modified";
 	private notice?: { text: string; tone: "info" | "error" };
 
@@ -337,13 +339,17 @@ export class WorkspacePanel implements Component {
 	 */
 	private windowStart(total: number, height: number, selected: number, which: "list" | "folder"): number {
 		if (which === "list") {
-			if (selected < this.scroll) this.scroll = selected;
-			if (selected >= this.scroll + height) this.scroll = selected - height + 1;
+			if (!this.manualScroll) {
+				if (selected < this.scroll) this.scroll = selected;
+				if (selected >= this.scroll + height) this.scroll = selected - height + 1;
+			}
 			this.scroll = Math.max(0, Math.min(this.scroll, Math.max(0, total - height)));
 			return this.scroll;
 		}
-		if (selected < this.folderScroll) this.folderScroll = selected;
-		if (selected >= this.folderScroll + height) this.folderScroll = selected - height + 1;
+		if (!this.folderManualScroll) {
+			if (selected < this.folderScroll) this.folderScroll = selected;
+			if (selected >= this.folderScroll + height) this.folderScroll = selected - height + 1;
+		}
 		this.folderScroll = Math.max(0, Math.min(this.folderScroll, Math.max(0, total - height)));
 		return this.folderScroll;
 	}
@@ -409,6 +415,7 @@ export class WorkspacePanel implements Component {
 	}
 
 	private clampSelection(): void {
+		this.manualScroll = false;
 		const total = this.entries().length;
 		this.selected = total === 0 ? 0 : Math.max(0, Math.min(this.selected, total - 1));
 	}
@@ -445,23 +452,50 @@ export class WorkspacePanel implements Component {
 	}
 
 	handleMouse(event: TuiMouseEvent): { handled: boolean } | undefined {
-		if (event.type !== "wheel" || event.wheelDelta === undefined) return undefined;
-		const delta = Math.max(1, Math.abs(Math.round(event.wheelDelta)));
-		if (this.mode === "folder") {
-			this.folderSelected = Math.max(
-				0,
-				Math.min(this.folderRows.length - 1, this.folderSelected + Math.sign(event.wheelDelta) * delta),
-			);
-		} else if (this.mode === "list") {
-			this.selected = Math.max(
-				0,
-				Math.min(this.entries().length - 1, this.selected + Math.sign(event.wheelDelta) * delta),
-			);
-		} else {
-			return undefined;
+		if (event.type === "wheel" && event.wheelDelta !== undefined) {
+			const delta = Math.max(1, Math.abs(Math.round(event.wheelDelta))) * Math.sign(event.wheelDelta);
+			if (this.mode === "folder") {
+				this.folderManualScroll = true;
+				this.folderScroll = Math.max(0, Math.min(this.folderRows.length - this.bodyRows(), this.folderScroll + delta));
+			} else if (this.mode === "list") {
+				this.manualScroll = true;
+				this.scroll = Math.max(0, Math.min(this.entries().length - this.bodyRows(), this.scroll + delta));
+			} else {
+				return undefined;
+			}
+			this.tui.requestRender();
+			return { handled: true };
 		}
-		this.tui.requestRender();
-		return { handled: true };
+
+		if (event.type === "move" || (event.type === "click" && event.button === "left")) {
+			const bodyIndex = event.y - 3;
+			if (bodyIndex < 0 || bodyIndex >= this.bodyRows()) return undefined;
+			if (this.mode === "folder") {
+				const index = this.folderScroll + bodyIndex;
+				if (index >= this.folderRows.length) return undefined;
+				if (event.type === "move") return undefined;
+				this.folderSelected = index;
+				this.folderManualScroll = false;
+				if (event.clickCount && event.clickCount > 1) this.handleFolderInput("\r");
+			} else if (this.mode === "list") {
+				const entries = this.entries();
+				const index = this.scroll + bodyIndex;
+				if (index >= entries.length) return undefined;
+				if (event.type === "move") {
+					if (this.selected === index) return undefined;
+					this.selected = index;
+				} else {
+					this.selected = index;
+					this.manualScroll = false;
+					if (event.clickCount && event.clickCount > 1) this.activate();
+				}
+			} else {
+				return undefined;
+			}
+			this.tui.requestRender();
+			return { handled: true };
+		}
+		return undefined;
 	}
 
 	private onEscape(): void {
@@ -528,11 +562,13 @@ export class WorkspacePanel implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.ctrl("n"))) {
+			this.manualScroll = false;
 			this.selected = Math.min(this.selected + 1, Math.max(0, this.entries().length - 1));
 			this.tui.requestRender();
 			return;
 		}
 		if (matchesKey(data, Key.ctrl("p"))) {
+			this.manualScroll = false;
 			this.selected = Math.max(0, this.selected - 1);
 			this.tui.requestRender();
 			return;
@@ -609,8 +645,13 @@ export class WorkspacePanel implements Component {
 	}
 
 	private applySelection(value: number, which: "list" | "folder"): void {
-		if (which === "list") this.selected = value;
-		else this.folderSelected = value;
+		if (which === "list") {
+			this.selected = value;
+			this.manualScroll = false;
+		} else {
+			this.folderSelected = value;
+			this.folderManualScroll = false;
+		}
 		this.tui.requestRender();
 	}
 
@@ -752,11 +793,14 @@ export class WorkspacePanel implements Component {
 		this.folderFilter = "";
 		this.folderSelected = 0;
 		this.folderScroll = 0;
+		this.folderManualScroll = false;
 		this.mode = "folder";
 		this.reloadFolderRows();
 	}
 
 	private reloadFolderRows(): void {
+		this.folderManualScroll = false;
+		this.folderScroll = 0;
 		const existing = listDirectories(this.folderPath);
 		const rows: FolderRow[] = [{ kind: "create", path: this.folderPath }];
 

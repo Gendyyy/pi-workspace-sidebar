@@ -187,15 +187,33 @@ describe("workspace panel", () => {
 			}
 		});
 
-		it("moves the list selection with mouse-wheel input", () => {
+		it("scrolls the pane with the mouse wheel without changing selection", () => {
+			box.action = undefined;
+			const workspaceList = workspaces.map((workspace) => workspace.cwd !== env.dirs.alpha ? workspace : ({
+				...workspace,
+				sessions: Array.from({ length: 30 }, (_, index) => ({
+					...workspace.sessions[0]!, title: `Scroll session ${index}`,
+				})),
+			}));
+			const panel = build({ deps: { workspaces: workspaceList } });
+			assert.deepEqual(panel.handleMouse({
+				type: "wheel", button: "none", x: 10, y: 5, screenX: 10, screenY: 5,
+				width: WIDTH, height: 20, shift: false, alt: false, ctrl: false, wheelDelta: 10,
+			}), { handled: true });
+			assert.ok(plain(panel.render(WIDTH)).includes("Scroll session 9"), "wheel moved the visible list");
+			panel.handleInput(KEYS.enter);
+			assert.equal(resolved(), undefined, "the unchanged selection is still the workspace row");
+		});
+
+		it("selects a session under the mouse cursor", () => {
 			box.action = undefined;
 			const panel = build();
 			assert.deepEqual(panel.handleMouse({
-				type: "wheel", button: "none", x: 10, y: 5, screenX: 10, screenY: 5,
-				width: WIDTH, height: 20, shift: false, alt: false, ctrl: false, wheelDelta: 1,
+				type: "click", button: "left", x: 10, y: 4, screenX: 10, screenY: 4,
+				width: WIDTH, height: 20, shift: false, alt: false, ctrl: false, clickCount: 1,
 			}), { handled: true });
 			panel.handleInput(KEYS.enter);
-			assert.equal(actionType(), "switch", "wheel selected the session row");
+			assert.equal(actionType(), "switch", "the clicked session is selected");
 		});
 
 		it("expands and collapses a workspace with Tab and the arrows", () => {

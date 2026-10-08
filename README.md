@@ -40,7 +40,8 @@ Other views:
   content hits include a matching snippet. `Ctrl+R` toggles unanchored,
   case-insensitive regex matching (`.` also spans newlines).
 - **Sort** (`s`) toggles sessions between most recently modified and most recently
-  created. Scroll the pane with the mouse wheel or keyboard.
+  created. The mouse wheel scrolls the pane independently of selection; move or
+  click the cursor to select a row, and double-click to activate it.
 - **Read-only where it counts.** Nothing is written until you act: creating a
   session writes a one-line session file, and if pi cancels the switch that file
   is removed again.
@@ -77,7 +78,8 @@ if it collides with something else.
 
 | Key | Action |
 | --- | --- |
-| `↑` `↓` / `PgUp` `PgDn` / `Ctrl+P` `Ctrl+N` / mouse wheel | Move and scroll the list |
+| `↑` `↓` / `PgUp` `PgDn` / `Ctrl+P` `Ctrl+N` | Move the selection; the mouse wheel scrolls independently |
+| Mouse cursor | Hover or click to select a row; double-click to activate |
 | `Enter` | Open the workspace, or switch to the session |
 | `Tab` / `←` | Collapse the workspace |
 | `→` / `Ctrl+L` | Expand the workspace |
