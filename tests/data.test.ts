@@ -150,6 +150,8 @@ describe("loadWorkspaces", () => {
 			[alphaNewest, alphaOldest],
 		);
 		assert.equal(alpha.sessions[1]?.messageCount, 3);
+		assert.ok(alpha.sessions[0]?.searchText.includes("alpha newest session"), "content is searchable");
+		assert.ok(alpha.sessions[0]?.created instanceof Date, "creation date is available for sorting");
 	});
 
 	it("labels workspaces and reads the git branch", async () => {

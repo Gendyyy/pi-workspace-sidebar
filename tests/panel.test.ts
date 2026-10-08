@@ -153,6 +153,31 @@ describe("workspace panel", () => {
 		});
 	});
 
+	describe("sorting", () => {
+		it("toggles between modified and created dates", () => {
+			const list = workspaces.map((workspace) => {
+				if (workspace.cwd !== env.dirs.alpha) return workspace;
+				const base = workspace.sessions[0]!;
+				return {
+					...workspace,
+					sessions: [
+						{ ...base, title: "Created newer", created: new Date(200), modified: new Date(100) },
+						{ ...base, title: "Modified newer", created: new Date(100), modified: new Date(200) },
+					],
+				};
+			});
+			const panel = build({ deps: { workspaces: list } });
+			let text = plain(panel.render(WIDTH));
+			assert.ok(text.indexOf("Modified newer") < text.indexOf("Created newer"), text);
+			panel.handleInput("s");
+			text = plain(panel.render(WIDTH));
+			assert.ok(text.includes("created"), text);
+			assert.ok(text.indexOf("Created newer") < text.indexOf("Modified newer"), text);
+			panel.handleInput("s");
+			assert.ok(plain(panel.render(WIDTH)).includes("modified"));
+		});
+	});
+
 	describe("navigation", () => {
 		it("survives every movement key", () => {
 			const panel = build();
@@ -160,6 +185,17 @@ describe("workspace panel", () => {
 				panel.handleInput(key);
 				assert.ok(panel.render(WIDTH).length > 0, `key ${JSON.stringify(key)} renders`);
 			}
+		});
+
+		it("moves the list selection with mouse-wheel input", () => {
+			box.action = undefined;
+			const panel = build();
+			assert.deepEqual(panel.handleMouse({
+				type: "wheel", button: "none", x: 10, y: 5, screenX: 10, screenY: 5,
+				width: WIDTH, height: 20, shift: false, alt: false, ctrl: false, wheelDelta: 1,
+			}), { handled: true });
+			panel.handleInput(KEYS.enter);
+			assert.equal(actionType(), "switch", "wheel selected the session row");
 		});
 
 		it("expands and collapses a workspace with Tab and the arrows", () => {
@@ -222,6 +258,41 @@ describe("workspace panel", () => {
 			const frame = panel.render(WIDTH);
 			assert.ok(plain(frame).includes("Summ"));
 			assert.equal(resolved(), undefined);
+		});
+
+		const contentRows = () => workspaces.map((workspace) => ({
+			...workspace,
+			sessions: workspace.sessions.map((session) => ({
+				...session,
+				title: "Named session",
+				searchText: "earlier text with a secretneedle inside the conversation",
+			})),
+		}));
+
+		it("finds session content and displays a matching snippet", () => {
+			const panel = build({ initialFilter: "secretneedle", deps: { workspaces: contentRows() } });
+			const text = plain(panel.render(WIDTH));
+			assert.ok(text.includes("Named session"), text);
+			assert.ok(text.includes("secretneedle"), text);
+		});
+
+		it("matches an unanchored regular expression in session content", () => {
+			const panel = build({ deps: { workspaces: contentRows() } });
+			panel.handleInput("/");
+			panel.handleInput("\x12"); // Ctrl+R toggles regex mode.
+			for (const char of "secret.*conversation") panel.handleInput(char);
+			const text = plain(panel.render(WIDTH));
+			assert.ok(text.includes("/re"), text);
+			assert.ok(text.includes("Named session"), text);
+			assert.ok(text.includes("secretneedle"), text);
+		});
+
+		it("shows an invalid-regex indicator without throwing", () => {
+			const panel = build({ deps: { workspaces: contentRows() } });
+			panel.handleInput("/");
+			panel.handleInput("\x12");
+			panel.handleInput("[");
+			assert.ok(plain(panel.render(WIDTH)).includes("invalid regex"));
 		});
 	});
 

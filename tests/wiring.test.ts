@@ -171,6 +171,21 @@ describe("extension wiring", () => {
 		assert.ok(notices.every((notice) => notice.tone !== "error"), JSON.stringify(notices));
 	});
 
+	it("opens /ws during a streaming turn without waiting for idle", async () => {
+		let opened = false;
+		await commands.get("ws")!.handler("", {
+			...baseCtx(),
+			ui: { ...makeUi([]), custom: async () => {
+				opened = true;
+				return { type: "cancel" };
+			} },
+			waitForIdle: async () => {
+				throw new Error("opening the panel must not wait for idle");
+			},
+		});
+		assert.equal(opened, true);
+	});
+
 	it("pre-filters the panel from /ws <filter>", async () => {
 		let frame: string[] = [];
 		await commands.get("ws")!.handler("wiring", {

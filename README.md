@@ -36,7 +36,11 @@ Other views:
   through a small folder browser (`o`).
 - **Rename** (`r`) and **delete** (`d`) sessions in place. Deletes go to the
   macOS trash when the `trash` CLI is available, otherwise the file is removed.
-- **Search** (`/`) filters workspaces and sessions as you type.
+- **Search** (`/`) filters by workspace, title, path, and conversation content;
+  content hits include a matching snippet. `Ctrl+R` toggles unanchored,
+  case-insensitive regex matching (`.` also spans newlines).
+- **Sort** (`s`) toggles sessions between most recently modified and most recently
+  created. Scroll the pane with the mouse wheel or keyboard.
 - **Read-only where it counts.** Nothing is written until you act: creating a
   session writes a one-line session file, and if pi cancels the switch that file
   is removed again.
@@ -73,12 +77,14 @@ if it collides with something else.
 
 | Key | Action |
 | --- | --- |
-| `↑` `↓` / `PgUp` `PgDn` / `Ctrl+P` `Ctrl+N` | Move |
+| `↑` `↓` / `PgUp` `PgDn` / `Ctrl+P` `Ctrl+N` / mouse wheel | Move and scroll the list |
 | `Enter` | Open the workspace, or switch to the session |
 | `Tab` / `←` | Collapse the workspace |
 | `→` / `Ctrl+L` | Expand the workspace |
-| `/` | Search (then any printable key filters, `Esc` leaves search) |
+| `/` | Search workspace, title, path, and conversation content (printable keys filter; `Esc` leaves search) |
+| `Ctrl+R` | Toggle regex mode; patterns match anywhere unless anchored with `^` |
 | `Backspace` / `Ctrl+U` | Edit / clear the filter |
+| `s` | Toggle sorting by modified / created date |
 | `n` | New session in the selected workspace |
 | `o` | Browse for a folder to start a session in |
 | `r` | Rename the selected session |

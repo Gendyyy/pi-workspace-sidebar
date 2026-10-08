@@ -16,6 +16,9 @@ export interface SessionRow {
 	/** Absolute path to the session JSONL file. Empty for a session not yet persisted. */
 	path: string;
 	title: string;
+	/** Full-text content exposed by pi's session scanner, for local search. */
+	searchText: string;
+	created: Date;
 	modified: Date;
 	messageCount: number;
 	/** True for the session pi currently has open. */
@@ -177,6 +180,8 @@ export async function loadWorkspaces(options: LoadOptions): Promise<WorkspaceRow
 		const rows: SessionRow[] = list.map((session) => ({
 			path: session.path,
 			title: sessionTitle(session),
+			searchText: session.allMessagesText.toLowerCase(),
+			created: session.created,
 			modified: session.modified,
 			messageCount: session.messageCount,
 			isCurrent: currentFile !== undefined && canonicalPath(session.path) === currentFile,

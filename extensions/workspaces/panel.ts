@@ -8,7 +8,7 @@
  * call switchSession().
  */
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth, visibleWidth, type Component, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import {
 	abbreviatePath,
 	expandHome,
@@ -48,7 +48,7 @@ interface Seg {
 
 type Entry =
 	| { kind: "workspace"; workspace: WorkspaceRow; expanded: boolean }
-	| { kind: "session"; workspace: WorkspaceRow; session: SessionRow };
+	| { kind: "session"; workspace: WorkspaceRow; session: SessionRow; matchSnippet?: string };
 
 type FolderRow =
 	| { kind: "create"; path: string }
@@ -75,6 +75,8 @@ export class WorkspacePanel implements Component {
 	private workspaces: WorkspaceRow[];
 	private expanded = new Set<string>();
 	private filter: string;
+	private regexMode = false;
+	private regexError?: string;
 	/**
 	 * True while printable keys extend the filter instead of firing actions.
 	 * Entered with `/` (or by an initialFilter), left with Esc/Ctrl+U, so the
@@ -84,6 +86,7 @@ export class WorkspacePanel implements Component {
 	private mode: Mode = "list";
 	private selected = 0;
 	private scroll = 0;
+	private sortMode: "modified" | "created" = "modified";
 	private notice?: { text: string; tone: "info" | "error" };
 
 	private renameTarget?: SessionRow;
@@ -136,7 +139,7 @@ export class WorkspacePanel implements Component {
 		lines.push(...this.renderListBody(innerW, bodyRows));
 		lines.push(this.separator(innerW));
 		lines.push(this.renderHints(innerW, this.mode === "rename" ? RENAME_HINTS : LIST_HINTS));
-		return this.box(lines, width, "Workspaces");
+		return this.box(lines, width, `Workspaces · ${this.sortMode}`);
 	}
 
 	private bodyRows(): number {
@@ -203,7 +206,10 @@ export class WorkspacePanel implements Component {
 			return ` ${th.fg("error", `delete "${truncateToWidth(this.deleteTarget?.title ?? "", innerW - 12, "…")}"? (y/n)`)}`;
 		}
 		if (this.filter) {
-			return ` ${th.fg("muted", "⌕ ")}${truncateToWidth(this.filter, innerW - 4, "…")}${th.fg("dim", "▏")}`;
+			if (this.regexMode) this.compileRegex(this.filter.trim().toLowerCase());
+			const mode = this.regexMode ? th.fg("accent", " /re ") : "";
+			const error = this.regexError ? th.fg("error", " invalid regex") : "";
+			return ` ${th.fg("muted", "⌕ ")}${mode}${truncateToWidth(this.filter, innerW - 4 - visibleWidth(mode) - visibleWidth(error), "…")}${error}${th.fg("dim", "▏")}`;
 		}
 		if (this.searching) {
 			return ` ${th.fg("muted", "⌕ ")}${th.fg("dim", "▏")}`;
@@ -258,11 +264,12 @@ export class WorkspacePanel implements Component {
 
 		const session = entry.session;
 		const meta = `${relativeTime(session.modified)} · ${session.messageCount}`;
+		const title = entry.matchSnippet ? `${session.title} · ${entry.matchSnippet}` : session.title;
 		const titleBudget = Math.max(8, innerW - 8 - visibleWidth(meta) - 2);
 		const segs: Seg[] = [
 			{ text: "    " },
 			{ text: session.isCurrent ? "● " : "○ ", color: session.isCurrent ? "success" : "muted" },
-			{ text: truncateToWidth(session.title, titleBudget, "…"), color: session.isCurrent ? "accent" : "text" },
+			{ text: truncateToWidth(title, titleBudget, "…"), color: session.isCurrent ? "accent" : "text" },
 		];
 		if (session.missingCwd) segs.push({ text: " ⚠", color: "warning" });
 		const right: Seg = { text: `${meta} `, color: "dim" };
@@ -343,25 +350,56 @@ export class WorkspacePanel implements Component {
 
 	// ------------------------------------------------------------- list model
 
+	private compileRegex(query: string): RegExp | undefined {
+		if (!this.regexMode || !query) {
+			this.regexError = undefined;
+			return undefined;
+		}
+		try {
+			this.regexError = undefined;
+			return new RegExp(query, "is");
+		} catch {
+			this.regexError = "Invalid regex";
+			return undefined;
+		}
+	}
+
 	private entries(): Entry[] {
 		const query = this.filter.trim().toLowerCase();
+		const regex = this.compileRegex(query);
+		const invalidRegex = this.regexMode && query.length > 0 && !regex;
+		const date = (session: SessionRow) => (this.sortMode === "modified" ? session.modified : session.created).getTime();
+		const workspaces = [...this.workspaces].sort((a, b) => {
+			if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+			const newest = (workspace: WorkspaceRow) =>
+				workspace.sessions.reduce((latest, session) => Math.max(latest, date(session)), 0);
+			return newest(b) - newest(a);
+		});
 		const out: Entry[] = [];
-		for (const workspace of this.workspaces) {
-			const workspaceMatches =
-				!query ||
-				`${workspace.label} ${workspace.cwd} ${workspace.branch ?? ""}`.toLowerCase().includes(query);
-			const sessions = !query
-				? workspace.sessions
-				: workspace.sessions.filter((session) =>
-						`${session.title} ${session.path}`.toLowerCase().includes(query),
-					);
+		for (const workspace of workspaces) {
+			const workspaceText = `${workspace.label} ${workspace.cwd} ${workspace.branch ?? ""}`.toLowerCase();
+			const workspaceMatches = !query || (!invalidRegex && (regex ? regex.test(workspaceText) : workspaceText.includes(query)));
+			const sessions: Entry[] = [...workspace.sessions]
+				.sort((a, b) => date(b) - date(a))
+				.flatMap((session): Entry[] => {
+					if (!query) return [{ kind: "session", workspace, session }];
+					if (invalidRegex) return [];
+					const metadataText = `${session.title} ${session.path}`.toLowerCase();
+					const metadataMatch = regex ? regex.test(metadataText) : metadataText.includes(query);
+					const contentMatch = regex ? regex.exec(session.searchText) : undefined;
+					const contentIndex = regex ? (contentMatch?.index ?? -1) : session.searchText.indexOf(query);
+					if (!metadataMatch && contentIndex < 0) return [];
+					const snippetLength = contentMatch?.[0].length ?? query.length;
+					const matchSnippet = !metadataMatch && contentIndex >= 0
+						? `…${session.searchText.slice(contentIndex, contentIndex + Math.min(snippetLength, 18)).replace(/\s+/g, " ")}…`
+						: undefined;
+					return [{ kind: "session", workspace, session, matchSnippet }];
+				});
 			if (query && !workspaceMatches && sessions.length === 0) continue;
 			// A search forces every surviving workspace open so hits are never hidden.
 			const expanded = query ? true : this.expanded.has(workspace.cwd);
 			out.push({ kind: "workspace", workspace, expanded });
-			if (expanded) {
-				for (const session of sessions) out.push({ kind: "session", workspace, session });
-			}
+			if (expanded) out.push(...sessions);
 		}
 		return out;
 	}
@@ -404,6 +442,26 @@ export class WorkspacePanel implements Component {
 			default:
 				this.handleListInput(data);
 		}
+	}
+
+	handleMouse(event: TuiMouseEvent): { handled: boolean } | undefined {
+		if (event.type !== "wheel" || event.wheelDelta === undefined) return undefined;
+		const delta = Math.max(1, Math.abs(Math.round(event.wheelDelta)));
+		if (this.mode === "folder") {
+			this.folderSelected = Math.max(
+				0,
+				Math.min(this.folderRows.length - 1, this.folderSelected + Math.sign(event.wheelDelta) * delta),
+			);
+		} else if (this.mode === "list") {
+			this.selected = Math.max(
+				0,
+				Math.min(this.entries().length - 1, this.selected + Math.sign(event.wheelDelta) * delta),
+			);
+		} else {
+			return undefined;
+		}
+		this.tui.requestRender();
+		return { handled: true };
 	}
 
 	private onEscape(): void {
@@ -455,8 +513,15 @@ export class WorkspacePanel implements Component {
 			this.tui.requestRender();
 			return;
 		}
+		if (matchesKey(data, Key.ctrl("r"))) {
+			this.regexMode = !this.regexMode;
+			this.compileRegex(this.filter.trim().toLowerCase());
+			this.tui.requestRender();
+			return;
+		}
 		if (matchesKey(data, Key.ctrl("u"))) {
 			this.filter = "";
+			this.regexError = undefined;
 			this.searching = false;
 			this.clampSelection();
 			this.tui.requestRender();
@@ -493,6 +558,12 @@ export class WorkspacePanel implements Component {
 					return;
 				case "d":
 					this.startDelete();
+					return;
+				case "s":
+					this.sortMode = this.sortMode === "modified" ? "created" : "modified";
+					this.selected = 0;
+					this.scroll = 0;
+					this.tui.requestRender();
 					return;
 				case "q":
 					this.done({ type: "cancel" });
@@ -766,10 +837,10 @@ export class WorkspacePanel implements Component {
 }
 
 const LIST_HINTS = [
-	"↑↓ move · ⏎ open · / search · n new · o folder · r rename · d delete · esc close",
-	"↑↓ move · ⏎ open · / search · n new · o folder · r/d · esc",
-	"↑↓ · ⏎ open · n new · o folder · r/d · esc",
-	"↑↓ · ⏎ open · n · o · esc",
+	"↑↓/wheel · ⏎ open · / search · ^R regex · s sort · n new · o · r/d · esc",
+	"↑↓/wheel · ⏎ open · ^R regex · s sort · n new · o · r/d · esc",
+	"↑↓/wheel · ⏎ open · ^R regex · s sort · n new · esc",
+	"↑↓/wheel · ⏎ open · ^R regex · s sort · n new · esc",
 ] as const;
 const RENAME_HINTS = ["⏎ save · esc cancel", "⏎ save · esc"] as const;
 const FOLDER_HINTS = [

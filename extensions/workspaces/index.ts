@@ -135,7 +135,8 @@ async function performAction(ctx: ExtensionCommandContext, action: PanelAction |
 
 async function runCommand(ctx: ExtensionCommandContext, initialFilter?: string): Promise<void> {
 	if (!requireTui(ctx)) return;
-	await ctx.waitForIdle();
+	// Show the panel immediately, even if an agent turn is streaming. Any action
+	// that changes sessions waits for idle in performAction().
 	const action = await openPanel(ctx, initialFilter);
 	await performAction(ctx, action);
 }
